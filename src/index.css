@@ -8,19 +8,19 @@ html, body {
 }
 
 /* Custom Scrollbar for Android-like feel */
-.android-scrollbar::-webkit-scrollbar {
-  width: 4px;
+::-webkit-scrollbar {
+  width: 3px;
 }
 
-.android-scrollbar::-webkit-scrollbar-track {
+::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.android-scrollbar::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb {
   background: #cbd5e1; /* slate-300 */
   border-radius: 10px;
 }
 
-.android-scrollbar::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background: #94a3b8; /* slate-400 */
 }

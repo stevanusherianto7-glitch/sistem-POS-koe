@@ -156,9 +156,7 @@ export default function App() {
   };
 
   const handleDeleteMenu = (id: number) => {
-    if (confirm('Hapus menu ini?')) {
-      setMenuItems(menuItems.filter(item => item.id !== id));
-    }
+    setMenuItems(menuItems.filter(item => item.id !== id));
   };
 
   // Logika Pengeluaran
@@ -178,9 +176,7 @@ export default function App() {
   };
 
   const handleDeleteExpense = (id: number) => {
-    if (confirm('Hapus catatan pengeluaran ini?')) {
-      setExpenses(expenses.filter(e => e.id !== id));
-    }
+    setExpenses(expenses.filter(e => e.id !== id));
   };
 
   // Logika Penjumlahan
@@ -287,7 +283,25 @@ export default function App() {
       });
 
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`Struk_BudeSri_${Date.now()}.pdf`);
+      
+      // OTOMATISASI UNTUK ANDROID:
+      // Alih-alih hanya .save(), kita buat Blob dan buka di tab baru untuk auto-print
+      const pdfBlob = pdf.output('blob');
+      const blobUrl = URL.createObjectURL(pdfBlob);
+      
+      // Buka di tab baru dan pemicu print otomatis
+      const printWindow = window.open(blobUrl);
+      if (printWindow) {
+        printWindow.onload = () => {
+          printWindow.print();
+          // Opsional: Beri nama file jika user memilih 'Save as PDF'
+          pdf.save(`Struk_BudeSri_${Date.now()}.pdf`);
+        };
+      } else {
+        // Fallback jika popup diblokir
+        pdf.save(`Struk_BudeSri_${Date.now()}.pdf`);
+        alert("PDF telah diunduh. Silakan buka file untuk mencetak.");
+      }
 
     } catch (error) {
       console.error("Gagal cetak PDF:", error);
@@ -333,7 +347,7 @@ export default function App() {
       <div className="space-y-6">
         {/* MINI CART LIST */}
         {cart.length > 0 && (
-          <div className="space-y-2 max-h-32 overflow-y-auto border-b border-slate-100 pb-4 android-scrollbar pr-1">
+          <div className="space-y-2 max-h-32 overflow-y-auto border-b border-slate-100 pb-4 pr-1">
             {cart.map(item => (
               <div key={item.id} className="flex justify-between items-center text-sm">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -586,7 +600,7 @@ export default function App() {
                 </div>
                 <p className="text-2xl font-black text-rose-600">{formatIDR(totalExpense)}</p>
               </div>
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 bg-blue-600 text-white border-none">
+              <div className="p-6 rounded-2xl shadow-sm bg-blue-600 text-white border-none">
                 <div className="flex items-center gap-3 mb-2 opacity-80">
                   <LayoutDashboard size={20} />
                   <span className="text-xs font-bold uppercase">Saldo Akhir (Cash on Hand)</span>
@@ -695,6 +709,7 @@ export default function App() {
                   >
                     <option value="Makanan">Makanan</option>
                     <option value="Minuman">Minuman</option>
+                    <option value="Pelengkap">Pelengkap</option>
                   </select>
                 </div>
                 <button 
