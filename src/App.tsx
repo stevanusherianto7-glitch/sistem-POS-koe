@@ -2,15 +2,23 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { 
   Plus, Minus, ShoppingCart, Printer, FileText, 
-  Trash2, Wallet, QrCode, History, Utensils,
+  Trash2, Wallet, QrCode, History, Utensils, ShoppingBag,
   Settings, X, Save, LayoutDashboard, Receipt,
-  ArrowUpCircle, ArrowDownCircle, Coins
+  ArrowUpCircle, ArrowDownCircle, Coins, CreditCard, TrendingUp
 } from 'lucide-react';
+import { Navbar } from './components/Navbar';
+import { MenuSelection } from './components/MenuSelection';
+import { BillingSection } from './components/BillingSection';
+import { ExpenseForm } from './components/ExpenseForm';
+import { IncomeForm } from './components/IncomeForm';
+import { ExpenseList } from './components/ExpenseList';
+import { IncomeList } from './components/IncomeList';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 // --- MOCK DATA ---
 const MENU_DATA = [
@@ -22,23 +30,14 @@ const MENU_DATA = [
 ];
 
 // --- UTILS ---
-const formatIDR = (amount: number) => {
-  return new Intl.NumberFormat('id-ID', {
-    style: 'currency',
-    currency: 'IDR',
-    minimumFractionDigits: 0,
-  }).format(amount).replace('Rp', 'Rp\u00A0');
-};
+import { formatIDR, formatDate } from './utils/formatters';
 
-const formatDate = (date: Date) => {
-  const formatter = new Intl.DateTimeFormat('id-ID', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
-  });
-  const parts = formatter.formatToParts(date);
-  const getPart = (type: string) => parts.find(p => p.type === type)?.value || '00';
-  return `${getPart('day')}/${getPart('month')}/${getPart('year')}, ${getPart('hour')}:${getPart('minute')}:${getPart('second')}`;
+const formatTransactionNumber = (date: Date | string, orderNum: number) => {
+  const d = new Date(date);
+  const day = d.getDate().toString().padStart(2, '0');
+  const month = (d.getMonth() + 1).toString().padStart(2, '0');
+  const bill = orderNum.toString().padStart(4, '0');
+  return `${day}${month}${bill}`;
 };
 
 // --- TYPES ---
@@ -54,6 +53,8 @@ interface CartItem {
   name: string;
   price: number;
   quantity: number;
+  note?: string;
+  isTakeAway?: boolean;
 }
 
 interface Expense {
@@ -65,25 +66,45 @@ interface Expense {
 
 export default function App() {
   // Navigation State
-  const [activeTab, setActiveTab] = useState<'kasir' | 'pengeluaran' | 'laporan'>('kasir');
+  const [activeTab, setActiveTab] = useState<'kasir' | 'pengeluaran' | 'pemasukan' | 'laporan'>('kasir');
+  const [pengeluaranSubTab, setPengeluaranSubTab] = useState<'harian' | 'bulanan'>('harian');
+  const [pemasukanSubTab, setPemasukanSubTab] = useState<'harian' | 'bulanan'>('harian');
 
   // State
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
-  const [paymentMethod, setPaymentMethod] = useState<'Tunai' | 'QRIS'>('Tunai');
+  const [paymentMethod, setPaymentMethod] = useState<'Tunai' | 'QRIS' | 'Debet'>('Tunai');
   const [cashReceived, setCashReceived] = useState<number>(0);
+  const [cashReceivedDisplay, setCashReceivedDisplay] = useState<string>('');
   const [showReceipt, setShowReceipt] = useState(false);
   const [isBillingOpen, setIsBillingOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // Petty Cash & Expenses State
   const [pettyCash, setPettyCash] = useState<number>(0);
+  const [pettyCashDisplay, setPettyCashDisplay] = useState<string>('');
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [newExpense, setNewExpense] = useState({ description: '', amount: '' });
 
+  // Additional Financial Metrics
+  const [monthlyExpense, setMonthlyExpense] = useState<number>(0);
+  const [monthlyExpenseDisplay, setMonthlyExpenseDisplay] = useState<string>('');
+  const [tenantIncome, setTenantIncome] = useState<number>(0);
+  const [tenantIncomeDisplay, setTenantIncomeDisplay] = useState<string>('');
+  const [dailyIncomes, setDailyIncomes] = useState<Expense[]>([]);
+  const [newDailyIncome, setNewDailyIncome] = useState({ description: '', amount: '' });
+
   // Form State for New Menu
   const [newItem, setNewItem] = useState({ name: '', price: '', category: 'Makanan' });
+
+  // Customer Info State
+  const [customerName, setCustomerName] = useState('');
+  const [customerWA, setCustomerWA] = useState('');
+
+  // Order Counter State
+  const [orderCounter, setOrderCounter] = useState(1);
+  const [currentOrderNumber, setCurrentOrderNumber] = useState<number | null>(null);
 
   // Load Data
   useEffect(() => {
@@ -92,6 +113,18 @@ export default function App() {
       setMenuItems(JSON.parse(savedMenu));
     } else {
       setMenuItems(MENU_DATA);
+    }
+
+    const savedCounter = localStorage.getItem('pos_order_counter');
+    const savedCounterDate = localStorage.getItem('pos_order_counter_date');
+    const today = new Date().toDateString();
+
+    if (savedCounterDate === today) {
+      if (savedCounter) setOrderCounter(Number(savedCounter));
+    } else {
+      setOrderCounter(1);
+      localStorage.setItem('pos_order_counter', '1');
+      localStorage.setItem('pos_order_counter_date', today);
     }
 
     const savedTransactions = localStorage.getItem('pos_transactions');
@@ -103,7 +136,11 @@ export default function App() {
     }
 
     const savedPettyCash = localStorage.getItem('pos_petty_cash');
-    if (savedPettyCash) setPettyCash(Number(savedPettyCash));
+    if (savedPettyCash) {
+      const val = Number(savedPettyCash);
+      setPettyCash(val);
+      setPettyCashDisplay(val === 0 ? '' : val.toLocaleString('id-ID').replace(/,/g, '.'));
+    }
 
     const savedExpenses = localStorage.getItem('pos_expenses');
     if (savedExpenses) {
@@ -111,6 +148,24 @@ export default function App() {
         ...e,
         timestamp: new Date(e.timestamp)
       })));
+    }
+
+    const savedDailyIncomes = localStorage.getItem('pos_daily_incomes');
+    if (savedDailyIncomes) {
+      setDailyIncomes(JSON.parse(savedDailyIncomes).map((e: any) => ({
+        ...e,
+        timestamp: new Date(e.timestamp)
+      })));
+    } else {
+      const oldParkingIncome = localStorage.getItem('parkingIncome');
+      if (oldParkingIncome && parseInt(oldParkingIncome) > 0) {
+        setDailyIncomes([{
+          id: Date.now(),
+          description: 'Parkiran Kendaraan',
+          amount: parseInt(oldParkingIncome),
+          timestamp: new Date()
+        }]);
+      }
     }
   }, []);
 
@@ -131,13 +186,58 @@ export default function App() {
     localStorage.setItem('pos_expenses', JSON.stringify(expenses));
   }, [expenses]);
 
+  useEffect(() => {
+    localStorage.setItem('pos_daily_incomes', JSON.stringify(dailyIncomes));
+  }, [dailyIncomes]);
+
+  useEffect(() => {
+    localStorage.setItem('pos_order_counter', orderCounter.toString());
+    localStorage.setItem('pos_order_counter_date', new Date().toDateString());
+  }, [orderCounter]);
+
   // Perhitungan
   const totalAmount = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   const change = cashReceived > totalAmount ? cashReceived - totalAmount : 0;
   
   const totalIncome = transactions.reduce((sum, t) => sum + t.total, 0);
+  const totalProfit = totalIncome * 0.5; // Margin profit 50%
   const totalExpense = expenses.reduce((sum, e) => sum + e.amount, 0);
-  const currentBalance = pettyCash + totalIncome - totalExpense;
+  const totalParkingIncome = dailyIncomes.reduce((sum, i) => sum + i.amount, 0);
+  const currentBalance = pettyCash + totalIncome + tenantIncome + totalParkingIncome - totalExpense - monthlyExpense;
+
+  // Perhitungan Detail untuk Laporan Closing
+  const itemsSold = useMemo(() => {
+    const map: Record<string, number> = {};
+    transactions.forEach(t => {
+      t.items.forEach((item: any) => {
+        map[item.name] = (map[item.name] || 0) + item.quantity;
+      });
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [transactions]);
+
+  const incomeByMethod = useMemo(() => {
+    const methods = { QRIS: 0, Debet: 0, Tunai: 0 };
+    transactions.forEach(t => {
+      if (t.paymentMethod === 'QRIS') methods.QRIS += t.total;
+      else if (t.paymentMethod === 'Debet') methods.Debet += t.total;
+      else if (t.paymentMethod === 'Tunai') methods.Tunai += t.total;
+    });
+    return methods;
+  }, [transactions]);
+
+  const totalPorsi = itemsSold.reduce((sum, [_, qty]) => sum + qty, 0);
+
+  // --- UTILS UNTUK INPUT FORMATTING ---
+  const formatInputNumber = (val: string) => {
+    const clean = val.replace(/\D/g, '');
+    if (!clean) return '';
+    return clean.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  };
+
+  const parseInputNumber = (val: string) => {
+    return Number(val.replace(/\./g, '')) || 0;
+  };
 
   // Logika Menu
   const handleAddMenu = (e: React.FormEvent) => {
@@ -147,7 +247,7 @@ export default function App() {
     const item: MenuItem = {
       id: Date.now(),
       name: newItem.name,
-      price: Number(newItem.price),
+      price: parseInputNumber(newItem.price),
       category: newItem.category
     };
     
@@ -167,7 +267,7 @@ export default function App() {
     const expense: Expense = {
       id: Date.now(),
       description: newExpense.description,
-      amount: Number(newExpense.amount),
+      amount: parseInputNumber(newExpense.amount),
       timestamp: new Date()
     };
 
@@ -179,34 +279,59 @@ export default function App() {
     setExpenses(expenses.filter(e => e.id !== id));
   };
 
+  const handleAddDailyIncome = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newDailyIncome.description || !newDailyIncome.amount) return;
+    
+    const income: Expense = {
+      id: Date.now(),
+      description: newDailyIncome.description,
+      amount: parseInputNumber(newDailyIncome.amount),
+      timestamp: new Date()
+    };
+    
+    setDailyIncomes([income, ...dailyIncomes]);
+    setNewDailyIncome({ description: '', amount: '' });
+  };
+
+  const handleDeleteDailyIncome = (id: number) => {
+    setDailyIncomes(dailyIncomes.filter(i => i.id !== id));
+  };
+
   // Logika Penjumlahan
-  const addToCart = (menuItem: any) => {
+  const addToCart = (menuItem: any, isTakeAway: boolean = false) => {
     setCart(prev => {
-      const existing = prev.find(item => item.id === menuItem.id);
+      const existing = prev.find(item => item.id === menuItem.id && !!item.isTakeAway === isTakeAway);
       if (existing) {
         return prev.map(item => 
-          item.id === menuItem.id ? { ...item, quantity: item.quantity + 1 } : item
+          (item.id === menuItem.id && !!item.isTakeAway === isTakeAway) ? { ...item, quantity: item.quantity + 1 } : item
         );
       }
-      return [...prev, { ...menuItem, quantity: 1 }];
+      return [...prev, { ...menuItem, quantity: 1, isTakeAway }];
     });
   };
 
-  const removeFromCart = (id: number) => {
+  const removeFromCart = (id: number, isTakeAway: boolean = false) => {
     setCart(prev => {
-      const existing = prev.find(item => item.id === id);
+      const existing = prev.find(item => item.id === id && !!item.isTakeAway === isTakeAway);
       if (existing && existing.quantity > 1) {
         return prev.map(item => 
-          item.id === id ? { ...item, quantity: item.quantity - 1 } : item
+          (item.id === id && !!item.isTakeAway === isTakeAway) ? { ...item, quantity: item.quantity - 1 } : item
         );
       }
-      return prev.filter(item => item.id !== id);
+      return prev.filter(item => !(item.id === id && !!item.isTakeAway === isTakeAway));
     });
   };
 
-  // --- LOGIKA CETAK THERMAL (HIDDEN IFRAME) ---
-  const handlePrint = () => {
-    const printContent = document.getElementById('receipt-thermal');
+  const updateCartNote = (id: number, isTakeAway: boolean, note: string) => {
+    setCart(prev => prev.map(item => 
+      (item.id === id && !!item.isTakeAway === isTakeAway) ? { ...item, note } : item
+    ));
+  };
+
+  // --- LOGIKA CETAK (REUSABLE) ---
+  const executePrint = (elementId: string) => {
+    const printContent = document.getElementById(elementId);
     if (!printContent) return;
 
     const iframe = document.createElement('iframe');
@@ -250,18 +375,138 @@ export default function App() {
     }
   };
 
-  // --- LOGIKA EXPORT PDF CLOSING (MOBILE OPTIMIZED) ---
-  const handleExportPDF = async () => {
-    const element = document.getElementById('receipt-thermal');
+  const handlePrintCustomer = () => executeExportPDF('receipt-thermal', 'Struk_Customer');
+  const handlePrintKitchen = () => executeExportPDF('receipt-kitchen', 'Pesanan_Dapur');
+
+  // --- LOGIKA EXPORT PDF (CORPORATE A4) ---
+  const handleExportCorporateReport = () => {
+    const doc = new jsPDF({
+      orientation: 'p',
+      unit: 'mm',
+      format: 'a4'
+    });
+
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 20;
+
+    // Header
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'bold');
+    doc.text('REKAPITULASI KEUANGAN BULANAN', pageWidth / 2, margin, { align: 'center' });
+    
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'normal');
+    doc.text('KEDAI ELVERA 57', pageWidth / 2, margin + 6, { align: 'center' });
+    
+    doc.setFontSize(10);
+    doc.text(`Tanggal: ${new Date().toLocaleDateString('id-ID')}`, pageWidth / 2, margin + 12, { align: 'center' });
+
+    // Summary Section
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.text('RINGKASAN KEUANGAN', margin, margin + 25);
+    
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    
+    doc.text('TOTAL OMSET KOTOR :', margin, margin + 32);
+    doc.text(formatIDR(totalIncome), pageWidth - margin, margin + 32, { align: 'right' });
+    
+    doc.text('TOTAL OMSET BERSIH 50% :', margin, margin + 38);
+    doc.text(formatIDR(totalProfit), pageWidth - margin, margin + 38, { align: 'right' });
+    
+    doc.text('Gaji + Listrik + Air + Internet :', margin, margin + 44);
+    doc.text(formatIDR(totalExpense), pageWidth - margin, margin + 44, { align: 'right' });
+    
+    doc.text('SALDO AKHIR (Cash on Hand) :', margin, margin + 50);
+    doc.text(formatIDR(currentBalance), pageWidth - margin, margin + 50, { align: 'right' });
+
+    // Transactions Table
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Rincian Transaksi Penjualan', margin, margin + 65);
+
+    const tableData = transactions.map(t => [
+      `#${formatTransactionNumber(t.timestamp, t.orderNumber)}`,
+      formatDate(t.timestamp),
+      t.paymentMethod,
+      formatIDR(t.total)
+    ]);
+
+    autoTable(doc, {
+      startY: margin + 70,
+      head: [['No. Transaksi', 'Waktu', 'Metode', 'Total']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [41, 128, 185] },
+      columnStyles: {
+        3: { halign: 'right' }
+      },
+      margin: { left: margin, right: margin },
+      didDrawPage: function (data) {
+        // Footer
+        const str = 'Halaman ' + (doc as any).internal.getNumberOfPages();
+        doc.setFontSize(10);
+        doc.text(str, pageWidth / 2, pageHeight - 10, { align: 'center' });
+      }
+    });
+
+    const finalY = (doc as any).lastAutoTable.finalY || margin + 75;
+
+    // Expenses Table
+    if (expenses.length > 0) {
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Rincian Pengeluaran', margin, finalY + 15);
+
+      const expenseData = expenses.map(e => [
+        formatDate(e.timestamp),
+        e.description,
+        formatIDR(e.amount)
+      ]);
+
+      autoTable(doc, {
+        startY: finalY + 20,
+        head: [['Waktu', 'Keterangan', 'Jumlah']],
+        body: expenseData,
+        theme: 'grid',
+        headStyles: { fillColor: [192, 57, 43] },
+        columnStyles: {
+          2: { halign: 'right' }
+        },
+        margin: { left: margin, right: margin },
+        didDrawPage: function (data) {
+          // Footer
+          const str = 'Halaman ' + (doc as any).internal.getNumberOfPages();
+          doc.setFontSize(10);
+          doc.text(str, pageWidth / 2, pageHeight - 10, { align: 'center' });
+        }
+      });
+    }
+
+    // Save
+    doc.save(`Laporan_Closing_${Date.now()}.pdf`);
+  };
+
+  // --- LOGIKA EXPORT PDF (REUSABLE) ---
+  const executeExportPDF = async (elementId: string, fileName: string) => {
+    const element = document.getElementById(elementId);
     if (!element) return;
 
     window.scrollTo(0, 0);
+    const originalDisplay = element.style.display;
+    const originalWidth = element.style.width;
+    const originalPadding = element.style.padding;
+    
     element.style.display = 'block';
-    element.style.width = '200px'; 
+    element.style.width = '215px'; // Approx 57mm at 96 DPI
+    element.style.padding = '8px';
 
     try {
+      console.log(`Memulai ekspor PDF untuk: ${elementId}`);
       const canvas = await html2canvas(element, {
-        scale: 2, // Statis 2 untuk kestabilan mobile
+        scale: 2,
         useCORS: true,
         allowTaint: true,
         logging: false,
@@ -271,7 +516,7 @@ export default function App() {
       });
 
       const imgData = canvas.toDataURL('image/png');
-      const pdfWidth = 58; 
+      const pdfWidth = 57; // Strict 57mm
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
 
       const pdf = new jsPDF({
@@ -284,326 +529,320 @@ export default function App() {
 
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
       
-      // OTOMATISASI UNTUK ANDROID:
-      // Alih-alih hanya .save(), kita buat Blob dan buka di tab baru untuk auto-print
       const pdfBlob = pdf.output('blob');
       const blobUrl = URL.createObjectURL(pdfBlob);
       
-      // Buka di tab baru dan pemicu print otomatis
       const printWindow = window.open(blobUrl);
       if (printWindow) {
         printWindow.onload = () => {
           printWindow.print();
-          // Opsional: Beri nama file jika user memilih 'Save as PDF'
-          pdf.save(`Struk_BudeSri_${Date.now()}.pdf`);
+          pdf.save(`${fileName}_${Date.now()}.pdf`);
         };
       } else {
-        // Fallback jika popup diblokir
-        pdf.save(`Struk_BudeSri_${Date.now()}.pdf`);
+        pdf.save(`${fileName}_${Date.now()}.pdf`);
         alert("PDF telah diunduh. Silakan buka file untuk mencetak.");
       }
 
     } catch (error) {
       console.error("Gagal cetak PDF:", error);
     } finally {
-      element.style.display = 'none';
+      element.style.display = originalDisplay;
+      element.style.width = originalWidth;
     }
   };
 
+  const handleExportClosing = () => executeExportPDF('report-closing', 'Laporan_Closing');
+  const handleExportCustomerPDF = () => executeExportPDF('receipt-thermal', 'Struk_Customer');
+
   const handleCheckout = () => {
     if (totalAmount === 0) return;
+    const orderNum = orderCounter;
     const newTransaction = {
       id: Date.now(),
+      orderNumber: orderNum,
+      customerName,
+      customerWA,
       total: totalAmount,
       items: [...cart],
       paymentMethod,
       timestamp: new Date()
     };
     setTransactions([newTransaction, ...transactions]);
+    setCurrentOrderNumber(orderNum);
+    setOrderCounter(prev => prev + 1);
     setShowReceipt(true);
   };
 
   const resetOrder = () => {
     setCart([]);
     setCashReceived(0);
+    setCashReceivedDisplay('');
+    setCustomerName('');
+    setCustomerWA('');
     setShowReceipt(false);
     setIsBillingOpen(false);
+    setCurrentOrderNumber(null);
   };
 
-  const BillingSection = () => (
-    <div className="bg-white rounded-t-3xl md:rounded-xl shadow-2xl md:shadow-lg border border-slate-200 p-6 md:sticky md:top-4 h-full md:h-auto overflow-y-auto touch-none md:touch-auto">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="font-bold flex items-center gap-2 text-lg text-slate-800">Pembayaran</h2>
-        <div className="flex items-center gap-3">
-          <button onClick={() => setCart([])} className="text-rose-600 flex items-center gap-1 text-sm font-bold active:scale-95">
-            <Trash2 size={16}/> RESET
-          </button>
-          <button onClick={() => setIsBillingOpen(false)} className="md:hidden text-slate-400 p-1">
-            <Minus size={24} />
-          </button>
-        </div>
-      </div>
-
-      <div className="space-y-6">
-        {/* MINI CART LIST */}
-        {cart.length > 0 && (
-          <div className="space-y-2 max-h-32 overflow-y-auto border-b border-slate-100 pb-4 pr-1">
-            {cart.map(item => (
-              <div key={item.id} className="flex justify-between items-center text-sm">
-                <div className="flex items-center gap-2 flex-1 min-w-0">
-                  <button onClick={() => removeFromCart(item.id)} className="text-rose-500 p-1 shrink-0 active:scale-90 transition-transform"><Minus size={14}/></button>
-                  <span className="font-medium truncate">{item.name}</span>
-                </div>
-                <div className="flex items-center gap-3 shrink-0 ml-2">
-                  <span className="text-slate-400 text-[11px] font-medium">x{item.quantity}</span>
-                  <div className="flex justify-between w-[90px] font-bold text-slate-700">
-                    <span>Rp</span>
-                    <span>{(item.price * item.quantity).toLocaleString('id-ID')}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
-          <p className="text-xs text-blue-600 font-bold uppercase mb-1">Total Bayar</p>
-          <p className="text-3xl font-black text-blue-700">{formatIDR(totalAmount)}</p>
-        </div>
-
-        <div className="space-y-3">
-          <p className="text-xs font-bold text-slate-500 uppercase">Metode Pembayaran</p>
-          <div className="grid grid-cols-2 gap-2">
-            <button 
-              onClick={() => setPaymentMethod('Tunai')}
-              className={`min-h-[50px] rounded-xl flex flex-col items-center justify-center gap-1 text-xs font-bold border transition-all active:scale-95 ${paymentMethod === 'Tunai' ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-slate-600 border-slate-200 active:bg-slate-50'}`}
-            >
-              <Wallet size={20}/> TUNAI
-            </button>
-            <button 
-              onClick={() => setPaymentMethod('QRIS')}
-              className={`min-h-[50px] rounded-xl flex flex-col items-center justify-center gap-1 text-xs font-bold border transition-all active:scale-95 ${paymentMethod === 'QRIS' ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-slate-600 border-slate-200 active:bg-slate-50'}`}
-            >
-              <QrCode size={20}/> QRIS
-            </button>
-          </div>
-        </div>
-
-        {paymentMethod === 'Tunai' && (
-          <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-500 uppercase">Uang Tunai Diterima</label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-slate-400">Rp</span>
-              <input 
-                type="number"
-                inputMode="numeric"
-                className="w-full pl-10 p-3 border border-slate-300 rounded-xl font-bold text-xl text-blue-600 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all min-h-[50px]"
-                placeholder="0"
-                value={cashReceived || ''}
-                onChange={(e) => setCashReceived(Number(e.target.value))}
-              />
-            </div>
-            <div className="flex justify-between items-center bg-emerald-50 p-3 rounded-xl border border-emerald-100">
-              <span className="text-xs text-emerald-600 font-bold uppercase">Kembalian</span>
-              <span className="text-lg font-bold text-emerald-700">{formatIDR(change)}</span>
-            </div>
-          </div>
-        )}
-
-        <button 
-          disabled={totalAmount === 0}
-          onClick={handleCheckout}
-          className="w-full bg-blue-600 active:bg-blue-700 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-2 text-lg active:scale-95 min-h-[56px]"
-        >
-          PROSES BAYAR
-        </button>
-      </div>
-    </div>
-  );
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans text-slate-900 pb-24 md:pb-0">
-      {/* TOP NAVIGATION BAR */}
-      <div className="bg-white border-b border-slate-200 sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-4">
-          <div className="flex justify-between items-center h-16">
-            <h1 className="text-xl font-bold text-blue-600 flex items-center gap-2">
-              <Utensils size={24} /> <span className="hidden sm:inline">Kedai Soto Bude Sri</span>
-            </h1>
-            
-            <div className="flex items-center gap-1 sm:gap-4">
-              <button 
-                onClick={() => setActiveTab('kasir')}
-                className={`px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${activeTab === 'kasir' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-50'}`}
-              >
-                <LayoutDashboard size={18} /> <span className="hidden md:inline">Kasir</span>
-              </button>
-              <button 
-                onClick={() => setActiveTab('pengeluaran')}
-                className={`px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${activeTab === 'pengeluaran' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-50'}`}
-              >
-                <ArrowDownCircle size={18} /> <span className="hidden md:inline">Pengeluaran</span>
-              </button>
-              <button 
-                onClick={() => setActiveTab('laporan')}
-                className={`px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${activeTab === 'laporan' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-50'}`}
-              >
-                <FileText size={18} /> <span className="hidden md:inline">Laporan</span>
-              </button>
-              <div className="w-px h-6 bg-slate-200 mx-1"></div>
-              <button 
-                onClick={() => setIsSettingsOpen(true)}
-                className="p-2 text-slate-400 hover:text-blue-600 transition-colors"
-              >
-                <Settings size={24} />
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
+      <Navbar activeTab={activeTab} setActiveTab={setActiveTab} setIsSettingsOpen={setIsSettingsOpen} />
 
       <div className="max-w-6xl mx-auto p-4">
         {activeTab === 'kasir' && (
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
             {/* LEFT: MENU SELECTION */}
             <div className="md:col-span-8 space-y-4">
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {menuItems.map(item => (
-                  <button 
-                    key={item.id}
-                    onClick={() => addToCart(item)}
-                    className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 text-left transition-all active:scale-95 active:bg-slate-50 min-h-[100px] flex flex-col justify-between"
-                  >
-                    <div>
-                      <p className="text-[10px] text-slate-500 uppercase font-semibold">{item.category}</p>
-                      <p className="font-bold text-slate-800 leading-tight mb-1 text-sm sm:text-base">{item.name}</p>
-                    </div>
-                    <p className="text-blue-600 font-bold text-sm">{formatIDR(item.price)}</p>
-                  </button>
-                ))}
-                {menuItems.length === 0 && (
-                  <div className="col-span-full py-12 text-center text-slate-400">
-                    <p>Belum ada menu. Klik ikon gerigi untuk menambah menu.</p>
-                  </div>
-                )}
-              </div>
+              <MenuSelection 
+                menuItems={menuItems}
+                cart={cart}
+                addToCart={addToCart}
+                removeFromCart={removeFromCart}
+                updateCartNote={updateCartNote}
+              />
             </div>
 
             {/* RIGHT: BILLING (DESKTOP ONLY) */}
             <div className="hidden md:block md:col-span-4">
-              {BillingSection()}
+              <BillingSection 
+                cart={cart}
+                totalAmount={totalAmount}
+                paymentMethod={paymentMethod}
+                setPaymentMethod={setPaymentMethod}
+                cashReceivedDisplay={cashReceivedDisplay}
+                change={change}
+                customerName={customerName}
+                customerWA={customerWA}
+                setCart={setCart}
+                setIsBillingOpen={setIsBillingOpen}
+                setCashReceivedDisplay={setCashReceivedDisplay}
+                setCashReceived={setCashReceived}
+                setCustomerName={setCustomerName}
+                setCustomerWA={setCustomerWA}
+                handleCheckout={handleCheckout}
+                removeFromCart={removeFromCart}
+                formatInputNumber={formatInputNumber}
+                parseInputNumber={parseInputNumber}
+              />
             </div>
           </div>
         )}
 
         {activeTab === 'pengeluaran' && (
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
-            <div className="md:col-span-4 space-y-6">
-              {/* PETTY CASH CARD */}
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-                <div className="flex items-center gap-3 text-blue-600">
-                  <Coins size={24} />
-                  <h3 className="font-bold text-lg">Modal Awal (Petty Cash)</h3>
-                </div>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-slate-400">Rp</span>
-                  <input 
-                    type="number"
-                    className="w-full pl-10 p-3 border border-slate-300 rounded-xl font-bold text-xl text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
-                    value={pettyCash || ''}
-                    onChange={(e) => setPettyCash(Number(e.target.value))}
-                    placeholder="0"
-                  />
-                </div>
-                <p className="text-xs text-slate-400 italic">Modal awal yang ada di laci kasir setiap pagi.</p>
-              </div>
-
-              {/* ADD EXPENSE FORM */}
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-                <div className="flex items-center gap-3 text-rose-600">
-                  <ArrowDownCircle size={24} />
-                  <h3 className="font-bold text-lg">Tambah Pengeluaran</h3>
-                </div>
-                <form onSubmit={handleAddExpense} className="space-y-3">
-                  <input 
-                    type="text"
-                    placeholder="Keterangan (Contoh: Beli Gas)"
-                    className="w-full p-3 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                    value={newExpense.description}
-                    onChange={e => setNewExpense({...newExpense, description: e.target.value})}
-                    required
-                  />
-                  <input 
-                    type="number"
-                    placeholder="Nominal"
-                    className="w-full p-3 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                    value={newExpense.amount}
-                    onChange={e => setNewExpense({...newExpense, amount: e.target.value})}
-                    required
-                  />
-                  <button type="submit" className="w-full bg-rose-600 text-white font-bold py-3 rounded-xl active:scale-95 transition-all">
-                    CATAT PENGELUARAN
-                  </button>
-                </form>
-              </div>
+          <div className="space-y-6">
+            <div className="flex gap-2 border-b border-slate-200 pb-2">
+              <button
+                onClick={() => setPengeluaranSubTab('harian')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${pengeluaranSubTab === 'harian' ? 'bg-rose-100 text-rose-600' : 'text-slate-500 hover:bg-slate-50'}`}
+              >
+                Pengeluaran Petty Cash Harian
+              </button>
+              <button
+                onClick={() => setPengeluaranSubTab('bulanan')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${pengeluaranSubTab === 'bulanan' ? 'bg-rose-100 text-rose-600' : 'text-slate-500 hover:bg-slate-50'}`}
+              >
+                Pengeluaran Bulanan
+              </button>
             </div>
 
-            <div className="md:col-span-8">
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="p-6 border-b border-slate-100">
-                  <h3 className="font-bold text-lg">Riwayat Pengeluaran</h3>
+            {pengeluaranSubTab === 'harian' && (
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+                <div className="md:col-span-5 space-y-6">
+                  <ExpenseForm 
+                    description={newExpense.description}
+                    amount={newExpense.amount}
+                    onChangeDescription={(val) => setNewExpense({...newExpense, description: val})}
+                    onChangeAmount={(val) => setNewExpense({...newExpense, amount: formatInputNumber(val)})}
+                    onSubmit={handleAddExpense}
+                  />
                 </div>
-                <div className="divide-y divide-slate-100">
-                  {expenses.map(e => (
-                    <div key={e.id} className="p-4 flex justify-between items-center hover:bg-slate-50 transition-colors">
-                      <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center">
-                          <ArrowDownCircle size={20} />
+
+                <div className="md:col-span-7">
+                  <ExpenseList expenses={expenses} onDelete={handleDeleteExpense} />
+                </div>
+              </div>
+            )}
+
+            {pengeluaranSubTab === 'bulanan' && (
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+                <div className="md:col-span-4 space-y-6">
+                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+                    <div className="flex items-center gap-3 text-rose-600">
+                      <Wallet size={24} />
+                      <h3 className="font-bold text-lg">Pengeluaran Bulanan</h3>
+                    </div>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Gaji, Listrik, Air, Internet, dll</label>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-slate-400">Rp</span>
+                          <input 
+                            type="text"
+                            inputMode="numeric"
+                            className="w-full pl-10 p-2 border border-slate-300 rounded-lg font-bold text-rose-600 focus:ring-2 focus:ring-rose-500 outline-none"
+                            value={monthlyExpenseDisplay === '0' ? '' : monthlyExpenseDisplay}
+                            onChange={(e) => {
+                              const formatted = formatInputNumber(e.target.value);
+                              setMonthlyExpenseDisplay(formatted);
+                              setMonthlyExpense(parseInputNumber(formatted));
+                            }}
+                            placeholder=""
+                          />
                         </div>
-                        <div>
-                          <p className="font-bold text-slate-800">{e.description}</p>
-                          <p className="text-xs text-slate-400">{formatDate(e.timestamp)}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <span className="font-bold text-rose-600">-{formatIDR(e.amount)}</span>
-                        <button onClick={() => handleDeleteExpense(e.id)} className="text-slate-300 hover:text-rose-500 transition-colors">
-                          <Trash2 size={18} />
-                        </button>
                       </div>
                     </div>
-                  ))}
-                  {expenses.length === 0 && (
-                    <div className="p-12 text-center text-slate-400 italic">Belum ada catatan pengeluaran.</div>
-                  )}
+                  </div>
                 </div>
               </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'pemasukan' && (
+          <div className="space-y-6">
+            <div className="flex gap-2 border-b border-slate-200 pb-2">
+              <button
+                onClick={() => setPemasukanSubTab('harian')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${pemasukanSubTab === 'harian' ? 'bg-emerald-100 text-emerald-600' : 'text-slate-500 hover:bg-slate-50'}`}
+              >
+                Pemasukan Harian
+              </button>
+              <button
+                onClick={() => setPemasukanSubTab('bulanan')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${pemasukanSubTab === 'bulanan' ? 'bg-emerald-100 text-emerald-600' : 'text-slate-500 hover:bg-slate-50'}`}
+              >
+                Pemasukan Bulanan
+              </button>
             </div>
+
+            {pemasukanSubTab === 'harian' && (
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+                <div className="md:col-span-5 space-y-6">
+                  <IncomeForm 
+                    description={newDailyIncome.description}
+                    amount={newDailyIncome.amount}
+                    onChangeDescription={(val) => setNewDailyIncome({...newDailyIncome, description: val})}
+                    onChangeAmount={(val) => setNewDailyIncome({...newDailyIncome, amount: formatInputNumber(val)})}
+                    onSubmit={handleAddDailyIncome}
+                  />
+                </div>
+
+                <div className="md:col-span-7">
+                  <IncomeList incomes={dailyIncomes} onDelete={handleDeleteDailyIncome} />
+                </div>
+              </div>
+            )}
+
+            {pemasukanSubTab === 'bulanan' && (
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+                <div className="md:col-span-4 space-y-6">
+                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+                    <div className="flex items-center gap-3 text-emerald-600">
+                      <Wallet size={24} />
+                      <h3 className="font-bold text-lg">Pemasukan Bulanan</h3>
+                    </div>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Sewa Lapak Tenant</label>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-slate-400">Rp</span>
+                          <input 
+                            type="text"
+                            inputMode="numeric"
+                            className="w-full pl-10 p-2 border border-slate-300 rounded-lg font-bold text-emerald-600 focus:ring-2 focus:ring-emerald-500 outline-none"
+                            value={tenantIncomeDisplay === '0' ? '' : tenantIncomeDisplay}
+                            onChange={(e) => {
+                              const formatted = formatInputNumber(e.target.value);
+                              setTenantIncomeDisplay(formatted);
+                              setTenantIncome(parseInputNumber(formatted));
+                            }}
+                            placeholder=""
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {activeTab === 'laporan' && (
           <div className="space-y-6">
             {/* SUMMARY CARDS */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                 <div className="flex items-center gap-3 text-blue-600 mb-2">
                   <ArrowUpCircle size={20} />
-                  <span className="text-xs font-bold uppercase">Total Pemasukan</span>
+                  <span className="text-xs font-bold uppercase">Omset Kotor Bulanan</span>
                 </div>
                 <p className="text-2xl font-black text-emerald-600">{formatIDR(totalIncome)}</p>
               </div>
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <div className="flex items-center gap-3 text-emerald-600 mb-2">
+                  <TrendingUp size={20} />
+                  <span className="text-xs font-bold uppercase">Omset Bersih (50%) Bulanan</span>
+                </div>
+                <p className="text-2xl font-black text-emerald-600">{formatIDR(totalProfit)}</p>
+              </div>
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <div className="flex items-center gap-3 text-emerald-600 mb-2">
+                  <ArrowUpCircle size={20} />
+                  <span className="text-xs font-bold uppercase">Pemasukan Sewa Lapak Tenant Bulanan</span>
+                </div>
+                <p className="text-2xl font-black text-emerald-600">{formatIDR(tenantIncome)}</p>
+              </div>
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <div className="flex items-center gap-3 text-emerald-600 mb-2">
+                  <ArrowUpCircle size={20} />
+                  <span className="text-xs font-bold uppercase">Pemasukan Parkiran Kendaraan Bulanan</span>
+                </div>
+                <p className="text-2xl font-black text-emerald-600">{formatIDR(totalParkingIncome)}</p>
+              </div>
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                 <div className="flex items-center gap-3 text-rose-600 mb-2">
                   <ArrowDownCircle size={20} />
-                  <span className="text-xs font-bold uppercase">Total Pengeluaran</span>
+                  <span className="text-xs font-bold uppercase">Pengeluaran Petty Cash Bulanan</span>
                 </div>
                 <p className="text-2xl font-black text-rose-600">{formatIDR(totalExpense)}</p>
               </div>
-              <div className="p-6 rounded-2xl shadow-sm bg-blue-600 text-white border-none">
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <div className="flex items-center gap-3 text-rose-600 mb-2">
+                  <ArrowDownCircle size={20} />
+                  <span className="text-xs font-bold uppercase">Pengeluaran Bulanan (Gaji, Listrik, Air, Internet)</span>
+                </div>
+                <p className="text-2xl font-black text-rose-600">{formatIDR(monthlyExpense)}</p>
+              </div>
+              
+              {/* PETTY CASH CARD (MOVED TO LAPORAN) */}
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 sm:col-span-1 lg:col-span-1 xl:col-span-2">
+                <div className="flex items-center gap-3 text-blue-600 mb-2">
+                  <Coins size={20} />
+                  <span className="text-xs font-bold uppercase">Modal Awal (Petty Cash) Hari Ini</span>
+                </div>
+                <div className="relative mt-2">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-slate-400">Rp</span>
+                  <input 
+                    type="text"
+                    inputMode="numeric"
+                    className="w-full pl-10 p-2 border border-slate-300 rounded-lg font-bold text-xl text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
+                    value={pettyCashDisplay === '0' ? '' : pettyCashDisplay}
+                    onChange={(e) => {
+                      const formatted = formatInputNumber(e.target.value);
+                      setPettyCashDisplay(formatted);
+                      setPettyCash(parseInputNumber(formatted));
+                    }}
+                    placeholder=""
+                  />
+                </div>
+              </div>
+
+              <div className="p-6 rounded-2xl shadow-sm bg-blue-600 text-white border-none sm:col-span-1 lg:col-span-2 xl:col-span-2">
                 <div className="flex items-center gap-3 mb-2 opacity-80">
                   <LayoutDashboard size={20} />
-                  <span className="text-xs font-bold uppercase">Saldo Akhir (Cash on Hand)</span>
+                  <span className="text-xs font-bold uppercase">Saldo Akhir Hari Ini</span>
                 </div>
                 <p className="text-2xl font-black">{formatIDR(currentBalance)}</p>
               </div>
@@ -613,8 +852,8 @@ export default function App() {
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="p-6 border-b border-slate-100 flex justify-between items-center">
                 <h3 className="font-bold text-lg">Riwayat Transaksi Penjualan</h3>
-                <button onClick={() => setTransactions([])} className="text-rose-600 text-sm font-bold flex items-center gap-1">
-                  <Trash2 size={16} /> Hapus Semua
+                <button onClick={handleExportCorporateReport} className="text-blue-600 hover:text-blue-700 transition-colors text-sm font-bold flex items-center gap-1 active:scale-95">
+                  <FileText size={16} /> Cetak Laporan
                 </button>
               </div>
               <div className="divide-y divide-slate-100">
@@ -622,7 +861,7 @@ export default function App() {
                   <div key={t.id} className="p-4 hover:bg-slate-50 transition-colors">
                     <div className="flex justify-between items-start mb-2">
                       <div>
-                        <p className="font-bold text-slate-800">Transaksi #{t.id.toString().slice(-6)}</p>
+                        <p className="font-bold text-slate-800">Transaksi #{formatTransactionNumber(t.timestamp, t.orderNumber)}</p>
                         <p className="text-xs text-slate-400">{formatDate(t.timestamp)} • {t.paymentMethod}</p>
                       </div>
                       <span className="font-bold text-emerald-600">{formatIDR(t.total)}</span>
@@ -695,11 +934,12 @@ export default function App() {
                     required
                   />
                   <input 
-                    type="number" 
+                    type="text" 
+                    inputMode="numeric"
                     placeholder="Harga"
                     className="p-3 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                     value={newItem.price}
-                    onChange={e => setNewItem({...newItem, price: e.target.value})}
+                    onChange={e => setNewItem({...newItem, price: formatInputNumber(e.target.value)})}
                     required
                   />
                   <select 
@@ -761,8 +1001,9 @@ export default function App() {
 
       {/* --- RECEIPT TEMPLATE (REFINED AUTHENTIC VERSION) --- */}
       <div style={{ position: 'absolute', left: '-9999px', top: '0' }}>
+        {/* CUSTOMER RECEIPT */}
         <div id="receipt-thermal" style={{ 
-          width: '200px',
+          width: '215px',
           padding: '15px 10px', 
           backgroundColor: '#ffffff',
           color: '#000000',
@@ -773,99 +1014,275 @@ export default function App() {
           lineHeight: '1.2'
         }}>
           {/* HEADER */}
-          <div style={{ textAlign: 'center', marginBottom: '6px' }}>
-            <div style={{ fontWeight: 'bold', fontSize: '13px', textTransform: 'uppercase', lineHeight: '1.1' }}>
-              KEDAI SOTO AYAM
+          <div style={{ textAlign: 'center', marginBottom: '8px' }}>
+            <div style={{ fontWeight: 'bold', fontSize: '11px', textTransform: 'uppercase' }}>
+              KEDAI ELVERA 57
             </div>
-            <div style={{ fontWeight: 'bold', fontSize: '13px', textTransform: 'uppercase', lineHeight: '1.1' }}>
-              "BUDE SRI"
+            <div style={{ fontSize: '9px' }}>
+              Jl. Pertanian No. 57
             </div>
-            <div style={{ fontSize: '9px', marginTop: '4px', lineHeight: '1.2' }}>
-              Jl. Pertanian Raya 11<br />
+            <div style={{ fontSize: '9px' }}>
               Lebak Bulus, Jakarta Selatan
+            </div>
+            <div style={{ fontSize: '9px' }}>
+              WA: 0812-3456-7890
+            </div>
+            <div style={{ fontWeight: 'bold', fontSize: '14px', marginTop: '5px' }}>
+              {currentOrderNumber ? `#${currentOrderNumber.toString().padStart(3, '0')}` : ''}
             </div>
           </div>
 
-          <div style={{ borderTop: '0.5px solid #444', width: '100%', margin: '8px 0' }}></div>
+          <div style={{ borderTop: '1px dashed #000', width: '100%', margin: '4px 0' }}></div>
 
           {/* INFO TRANSAKSI */}
           <div style={{ fontSize: '9px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-              <span>{new Date().toLocaleDateString('id-ID')}</span>
-              <span>Kasir: Admin</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Tgl: {new Date().toLocaleDateString('id-ID')}</span>
+              <span>Jam: {new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace(/\./g, ':')}</span>
             </div>
-            <div style={{ width: '100%' }}>{new Date().toLocaleTimeString('id-ID').replace(/\./g, ':')}</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>No. Bill: {transactions.length > 0 ? formatTransactionNumber(transactions[0].timestamp, transactions[0].orderNumber) : '01010001'}</span>
+              <span>Pelayan: Admin</span>
+            </div>
           </div>
 
-          <div style={{ borderTop: '0.5px solid #444', width: '100%', margin: '10px 0' }}></div>
+          <div style={{ borderTop: '1px dashed #000', width: '100%', marginTop: '10px' }}></div>
+
+          {/* TABLE HEADER */}
+          <div style={{ fontSize: '9px', display: 'flex', justifyContent: 'space-between', fontWeight: 'normal', marginTop: '3px', marginBottom: '10px', lineHeight: '1' }}>
+            <span style={{ width: '70px' }}>Transaksi</span>
+            <span style={{ width: '25px', textAlign: 'center' }}>Qty</span>
+            <span style={{ width: '40px', textAlign: 'right' }}>Harga</span>
+            <span style={{ width: '45px', textAlign: 'right' }}>Total</span>
+          </div>
+
+          <div style={{ borderTop: '1px dashed #000', width: '100%' }}></div>
 
           {/* RINCIAN ITEM (BODY) */}
-          <div style={{ fontSize: '9px', display: 'flex', flexDirection: 'column', gap: '4px', margin: '2px 0' }}>
+          <div style={{ fontSize: '9px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {cart.map(item => (
-              <div key={item.id} style={{ display: 'flex', alignItems: 'flex-start', width: '100%' }}>
-                <span style={{ flex: '1', wordBreak: 'break-word', paddingRight: '4px' }}>{item.name}</span>
-                <span style={{ width: '20px', textAlign: 'center' }}>{item.quantity}</span>
-                <div style={{ width: '60px', display: 'flex', justifyContent: 'space-between', marginLeft: '4px' }}>
-                  <span>Rp</span>
-                  <span>{(item.price * item.quantity).toLocaleString('id-ID')}</span>
+              <div key={`${item.id}-${item.isTakeAway}`} style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <span style={{ width: '70px', wordBreak: 'break-word' }}>{item.name}</span>
+                  <span style={{ width: '25px', textAlign: 'center' }}>{item.quantity}</span>
+                  <span style={{ width: '40px', textAlign: 'right' }}>{item.price.toLocaleString('id-ID')}</span>
+                  <span style={{ width: '45px', textAlign: 'right' }}>{(item.price * item.quantity).toLocaleString('id-ID')}</span>
                 </div>
               </div>
             ))}
           </div>
 
-          <div style={{ borderTop: '0.5px solid #444', width: '100%', margin: '10px 0' }}></div>
+          <div style={{ borderTop: '1px dashed #000', width: '100%', marginTop: '10px' }}></div>
 
-          {/* TOTAL UTAMA */}
-          <div style={{ margin: '8px 0', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
-            <div style={{ fontSize: '10px', fontWeight: 'bold' }}>TOTAL BELANJA</div>
-            <div style={{ fontSize: '18px', fontWeight: 'bold', whiteSpace: 'nowrap', paddingBottom: '8px' }}>
-              Rp {totalAmount.toLocaleString('id-ID')}
+          {/* SUMMARY */}
+          <div style={{ fontSize: '9px', display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '3px', marginBottom: '10px', lineHeight: '1' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
+              <span>TOTAL</span>
+              <span>{totalAmount.toLocaleString('id-ID')}</span>
             </div>
           </div>
 
-          <div style={{ borderTop: '0.5px solid #444', width: '100%', margin: '10px 0' }}></div>
+          <div style={{ borderTop: '1px dashed #000', width: '100%' }}></div>
 
-          {/* RINCIAN PEMBAYARAN */}
-          <div style={{ fontSize: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-              <span>Metode:</span>
+          <div style={{ fontSize: '9px', display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Metode Bayar</span>
               <span>{paymentMethod}</span>
             </div>
-            {paymentMethod === 'Tunai' && (
-              <>
-                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                  <span>Bayar:</span>
-                  <div style={{ width: '75px', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Rp</span>
-                    <span>{cashReceived.toLocaleString('id-ID')}</span>
-                  </div>
-                </div>
-                <div style={{ borderTop: '0.5px solid #444', margin: '6px 0' }}></div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                  <span>Kembali:</span>
-                  <div style={{ width: '75px', display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
-                    <span>Rp</span>
-                    <span>{change.toLocaleString('id-ID')}</span>
-                  </div>
-                </div>
-              </>
-            )}
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Bayar</span>
+              <span>{cashReceived.toLocaleString('id-ID')}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Kembali</span>
+              <span>{change.toLocaleString('id-ID')}</span>
+            </div>
           </div>
 
-          {/* WHITESPACE UNTUK KESAN STRUK PANJANG */}
-          <div style={{ height: '30px' }}></div>
-
-          <div style={{ borderTop: '0.5px solid #444', width: '100%', margin: '12px 0 10px 0' }}></div>
+          <div style={{ borderTop: '1px dashed #000', width: '100%', margin: '10px 0' }}></div>
 
           {/* FOOTER */}
-          <div style={{ textAlign: 'center', fontSize: '9px', display: 'flex', flexDirection: 'column', gap: '4px', fontWeight: 'normal' }}>
-            <div>Terima Kasih</div>
-            <div>Atas Pembelian Anda</div>
-            <div>Kami tunggu kembali</div>
-            <div>Kedatangannya</div>
+          <div style={{ textAlign: 'center', fontSize: '9px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <div>Terima Kasih,</div>
+            <div>Ditunggu Kembali Kedatangannya!</div>
           </div>
 
-          {/* Extra space untuk sobekan kertas */}
+          <div style={{ height: '15mm' }}></div>
+        </div>
+
+        {/* KITCHEN RECEIPT */}
+        <div id="receipt-kitchen" style={{ 
+          width: '215px',
+          padding: '15px 10px', 
+          backgroundColor: '#ffffff',
+          color: '#000000',
+          fontFamily: '"Courier New", Courier, monospace',
+          boxSizing: 'border-box',
+          display: 'flex',
+          flexDirection: 'column',
+          lineHeight: '1.2'
+        }}>
+          <div style={{ textAlign: 'center', marginBottom: '10px', borderBottom: '1px dashed #000', paddingBottom: '5px' }}>
+            <div style={{ fontWeight: 'bold', fontSize: '16px' }}>PESANAN KITCHEN</div>
+            <div style={{ fontWeight: 'bold', fontSize: '20px', margin: '5px 0' }}>
+              {currentOrderNumber ? `#${currentOrderNumber.toString().padStart(3, '0')}` : `#${orderCounter.toString().padStart(3, '0')}`}
+            </div>
+            <div style={{ fontSize: '10px' }}>{new Date().toLocaleDateString('id-ID')} {new Date().toLocaleTimeString('id-ID').replace(/\./g, ':')}</div>
+          </div>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {cart.map(item => (
+              <div key={`${item.id}-${item.isTakeAway}`} style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderBottom: '0.5px solid #eee', paddingBottom: '6px', marginTop: '4px' }}>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', minWidth: '40px', lineHeight: '1' }}>{item.quantity}x</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <div style={{ fontSize: '18px', fontWeight: 'bold', wordBreak: 'break-word', lineHeight: '1.2' }}>{item.name}</div>
+                    {item.isTakeAway ? (
+                      <div style={{ fontSize: '14px', fontWeight: 'black', color: '#000', marginTop: '2px' }}>
+                        [ TAKE AWAY ]
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '14px', fontWeight: 'black', color: '#000', marginTop: '2px' }}>
+                        [ DINE IN ]
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {item.note && (
+                  <div style={{ 
+                    fontSize: '12px', 
+                    fontWeight: 'bold', 
+                    fontStyle: 'italic', 
+                    color: '#000', 
+                    marginLeft: '50px', 
+                    marginTop: '2px',
+                    lineHeight: '1.2',
+                    display: 'flex',
+                    flexDirection: 'column'
+                  }}>
+                    <span style={{ fontSize: '9px', textTransform: 'uppercase', marginBottom: '1px', opacity: 0.8 }}>Catatan:</span>
+                    <span style={{ textTransform: 'uppercase' }}>{item.note}</span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div style={{ borderTop: '1px dashed #000', margin: '15px 0' }}></div>
+          
+          {(customerName || customerWA) && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 'bold', marginBottom: '10px' }}>
+                <span style={{ textAlign: 'left', textTransform: 'uppercase' }}>{customerName || '-'}</span>
+                <span style={{ textAlign: 'right' }}>{customerWA || '-'}</span>
+              </div>
+              <div style={{ borderTop: '1px dashed #000', margin: '10px 0' }}></div>
+            </>
+          )}
+
+          <div style={{ textAlign: 'center', fontSize: '10px', fontWeight: 'bold' }}>--- SEGERA DIPROSES ---</div>
+          <div style={{ height: '20mm' }}></div>
+        </div>
+
+        {/* CLOSING REPORT (AUTHENTIC REFERENCE STYLE) */}
+        <div id="report-closing" style={{ 
+          width: '215px',
+          padding: '15px 10px', 
+          backgroundColor: '#ffffff',
+          color: '#000000',
+          fontFamily: '"Courier New", Courier, monospace',
+          boxSizing: 'border-box',
+          display: 'flex',
+          flexDirection: 'column',
+          lineHeight: '1.2'
+        }}>
+          {/* HEADER */}
+          <div style={{ textAlign: 'center', marginBottom: '10px', lineHeight: '1.2' }}>
+            <div style={{ fontWeight: 'bold', fontSize: '14px', textTransform: 'uppercase', marginBottom: '0px' }}>KEDAI ELVERA 57</div>
+            <div style={{ fontSize: '8px', marginTop: '4px', lineHeight: '1.2' }}>
+              Jl. Pertanian No. 57, Lebak Bulus<br />
+              Jakarta Selatan
+            </div>
+          </div>
+
+          <div style={{ fontSize: '9px', marginBottom: '10px', lineHeight: '1.4' }}>
+            <div style={{ fontWeight: 'bold', fontSize: '10px', marginBottom: '2px' }}>LAPORAN SHIFT</div>
+            <div>Status Closing</div>
+            <div style={{ marginTop: '4px' }}>Kasir: Admin</div>
+            <div>Mulai: {transactions.length > 0 ? formatDate(transactions[transactions.length - 1].timestamp) : formatDate(new Date())}</div>
+            <div>Selesai: {formatDate(new Date())}</div>
+            <div style={{ marginTop: '4px' }}>Terjual {itemsSold.length} Item</div>
+            <div>Terjual {totalPorsi} Porsi</div>
+          </div>
+
+          <div style={{ borderTop: '1px dashed #000', marginTop: '15px' }}></div>
+          <div style={{ fontSize: '9px', fontWeight: 'bold', textAlign: 'left', marginTop: '3px', marginBottom: '10px', lineHeight: '1' }}>DETAIL TRANSAKSI</div>
+          <div style={{ borderTop: '1px dashed #000' }}></div>
+
+          <div style={{ fontSize: '9px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            {itemsSold.map(([name, qty]) => (
+              <div key={name} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ flex: 1, paddingRight: '4px' }}>{name}</span>
+                <span>x {qty}</span>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ borderTop: '1px dashed #000', marginTop: '15px' }}></div>
+          <div style={{ fontSize: '9px', fontWeight: 'bold', textAlign: 'left', marginTop: '3px', marginBottom: '10px', lineHeight: '1' }}>DETAIL PEMASUKAN</div>
+          <div style={{ borderTop: '1px dashed #000' }}></div>
+
+          <div style={{ fontSize: '9px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>QRIS</span>
+              <span>Rp {incomeByMethod.QRIS.toLocaleString('id-ID')}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>DEBIT CARD</span>
+              <span>Rp {incomeByMethod.Debet.toLocaleString('id-ID')}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>TUNAI</span>
+              <span>Rp {incomeByMethod.Tunai.toLocaleString('id-ID')}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', marginTop: '2px' }}>
+              <span>TOTAL PEMASUKAN</span>
+              <span>Rp {totalIncome.toLocaleString('id-ID')}</span>
+            </div>
+          </div>
+
+          <div style={{ borderTop: '1px dashed #000', marginTop: '15px' }}></div>
+          <div style={{ fontSize: '9px', fontWeight: 'bold', textAlign: 'left', marginTop: '3px', marginBottom: '10px', lineHeight: '1' }}>DETAIL KAS KECIL</div>
+          <div style={{ borderTop: '1px dashed #000' }}></div>
+
+          <div style={{ fontSize: '9px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>KAS AWAL</span>
+              <span>Rp {pettyCash.toLocaleString('id-ID')}</span>
+            </div>
+            {expenses.map(e => (
+              <div key={e.id} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>{e.description}</span>
+                <span>(Rp {e.amount.toLocaleString('id-ID')})</span>
+              </div>
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+              <span>SALDO</span>
+              <span>Rp {(totalIncome + pettyCash - totalExpense).toLocaleString('id-ID')}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
+              <span>TOTAL KAS</span>
+              <span>Rp {(totalIncome + pettyCash - totalExpense).toLocaleString('id-ID')}</span>
+            </div>
+          </div>
+
+          <div style={{ borderTop: '0.5px dashed #000', margin: '15px 0' }}></div>
+          <div style={{ textAlign: 'center', fontSize: '8px' }}>
+            <div>Diterbitkan Oleh</div>
+            <div style={{ fontWeight: 'bold' }}>Kedai Elvera 57 POS App</div>
+            <div style={{ fontSize: '7px' }}>Jl. Pertanian No. 57</div>
+            <div style={{ fontSize: '7px' }}>Lebak Bulus, Jakarta Selatan</div>
+          </div>
           <div style={{ height: '20mm' }}></div>
         </div>
       </div>
@@ -884,20 +1301,26 @@ export default function App() {
 
             <div className="space-y-2">
               <button 
-                onClick={handlePrint}
-                className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-3 rounded-xl font-bold"
+                onClick={handlePrintKitchen}
+                className="w-full flex items-center justify-center gap-2 bg-rose-600 text-white py-3 rounded-xl font-bold active:scale-95 transition-all"
               >
-                <Printer size={18} /> CETAK STRUK (THERMAL)
+                <Utensils size={18} /> CETAK KITCHEN
               </button>
               <button 
-                onClick={handleExportPDF}
-                className="w-full flex items-center justify-center gap-2 bg-slate-800 text-white py-3 rounded-xl font-bold"
+                onClick={handlePrintCustomer}
+                className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-3 rounded-xl font-bold active:scale-95 transition-all"
               >
-                <FileText size={18} /> SIMPAN PDF (CLOSING)
+                <Printer size={18} /> CETAK CUSTOMER
+              </button>
+              <button 
+                onClick={handleExportClosing}
+                className="w-full flex items-center justify-center gap-2 bg-slate-800 text-white py-3 rounded-xl font-bold active:scale-95 transition-all"
+              >
+                <FileText size={18} /> LAPORAN CLOSING
               </button>
               <button 
                 onClick={resetOrder}
-                className="w-full text-slate-500 text-sm font-bold py-2"
+                className="w-full text-slate-500 text-sm font-bold py-2 mt-2"
               >
                 Tutup & Transaksi Baru
               </button>
