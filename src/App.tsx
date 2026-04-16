@@ -78,6 +78,7 @@ export default function App() {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
+  const [voidedTransactions, setVoidedTransactions] = useState<any[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<'Tunai' | 'QRIS' | 'Debet'>('Tunai');
   const [cashReceived, setCashReceived] = useState<number>(0);
   const [cashReceivedDisplay, setCashReceivedDisplay] = useState<string>('');
@@ -726,6 +727,21 @@ export default function App() {
     }
   };
 
+  const handleVoidTransaction = async (id: number) => {
+    if (!confirm('Apakah Anda yakin ingin membatalkan (void) transaksi ini?')) return;
+    
+    const txToVoid = transactions.find(t => t.id === id);
+    if (txToVoid) {
+      setVoidedTransactions([txToVoid, ...voidedTransactions]);
+    }
+    
+    setTransactions(transactions.filter(t => t.id !== id));
+    
+    if (supabase) {
+      await supabase.from('transactions').delete().eq('id', id);
+    }
+  };
+
   const resetOrder = () => {
     setCart([]);
     setCashReceived(0);
@@ -1028,25 +1044,57 @@ export default function App() {
               </div>
               <div className="divide-y divide-slate-100">
                 {filteredTransactions.map(t => (
-                  <div key={t.id} className="p-4 hover:bg-slate-50 transition-colors">
-                    <div className="flex justify-between items-start mb-2">
-                      <div>
-                        <p className="font-bold text-slate-800">Transaksi #{formatTransactionNumber(t.timestamp, t.orderNumber)}</p>
-                        <p className="text-xs text-slate-400">{formatDate(t.timestamp)} • {t.paymentMethod}</p>
+                  <div key={t.id} className="p-4 hover:bg-slate-50 transition-colors flex justify-between items-center">
+                    <div className="flex-1">
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <p className="font-bold text-slate-800">Transaksi #{formatTransactionNumber(t.timestamp, t.orderNumber)}</p>
+                          <p className="text-xs text-slate-400">{formatDate(t.timestamp)} • {t.paymentMethod}</p>
+                        </div>
+                        <span className="font-bold text-emerald-600">{formatIDR(t.total)}</span>
                       </div>
-                      <span className="font-bold text-emerald-600">{formatIDR(t.total)}</span>
+                      <div className="flex flex-wrap gap-2">
+                        {t.items?.map((item: any, idx: number) => (
+                          <span key={idx} className="text-[10px] bg-slate-100 text-slate-600 px-2 py-1 rounded">
+                            {item.name} x{item.quantity}
+                          </span>
+                        ))}
+                      </div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {t.items?.map((item: any, idx: number) => (
-                        <span key={idx} className="text-[10px] bg-slate-100 text-slate-600 px-2 py-1 rounded">
-                          {item.name} x{item.quantity}
-                        </span>
-                      ))}
-                    </div>
+                    <button 
+                      onClick={() => handleVoidTransaction(t.id)}
+                      className="ml-4 text-rose-500 hover:bg-rose-50 p-2 rounded-lg transition-colors"
+                      title="Void Transaksi"
+                    >
+                      <Trash2 size={18} />
+                    </button>
                   </div>
                 ))}
                 {filteredTransactions.length === 0 && (
                   <div className="p-12 text-center text-slate-400 italic">Belum ada riwayat transaksi untuk bulan ini.</div>
+                )}
+              </div>
+            </div>
+
+            {/* VOIDED TRANSACTIONS HISTORY */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="p-6 border-b border-slate-100">
+                <h3 className="font-bold text-lg text-rose-600">Riwayat Transaksi Dibatalkan (Void)</h3>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {voidedTransactions.filter(t => isSameMonth(t.timestamp, filterMonth)).map(t => (
+                  <div key={t.id} className="p-4 bg-rose-50/50">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <p className="font-bold text-slate-800 line-through">Transaksi #{formatTransactionNumber(t.timestamp, t.orderNumber)}</p>
+                        <p className="text-xs text-slate-400">{formatDate(t.timestamp)} • {t.paymentMethod}</p>
+                      </div>
+                      <span className="font-bold text-rose-600 line-through">{formatIDR(t.total)}</span>
+                    </div>
+                  </div>
+                ))}
+                {voidedTransactions.filter(t => isSameMonth(t.timestamp, filterMonth)).length === 0 && (
+                  <div className="p-12 text-center text-slate-400 italic">Belum ada riwayat transaksi dibatalkan.</div>
                 )}
               </div>
             </div>
