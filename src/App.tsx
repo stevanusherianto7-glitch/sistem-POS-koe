@@ -746,7 +746,7 @@ export default function App() {
         {activeTab === 'kasir' && (
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
             {/* LEFT: MENU SELECTION */}
-            <div className="md:col-span-8 space-y-4">
+            <div className="col-span-1 md:col-span-8 space-y-4">
               <MenuSelection 
                 menuItems={menuItems}
                 cart={cart}
