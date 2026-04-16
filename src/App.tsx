@@ -19,6 +19,7 @@ import { IncomeList } from './components/IncomeList';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { supabase } from './lib/supabase';
 
 // --- MOCK DATA ---
 const MENU_DATA = [
@@ -67,6 +68,9 @@ interface Expense {
 export default function App() {
   // Navigation State
   const [activeTab, setActiveTab] = useState<'kasir' | 'pengeluaran' | 'pemasukan' | 'laporan'>('kasir');
+  const now = new Date();
+  const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const [filterMonth, setFilterMonth] = useState<string>(currentMonthStr);
   const [pengeluaranSubTab, setPengeluaranSubTab] = useState<'harian' | 'bulanan'>('harian');
   const [pemasukanSubTab, setPemasukanSubTab] = useState<'harian' | 'bulanan'>('harian');
 
@@ -108,65 +112,121 @@ export default function App() {
 
   // Load Data
   useEffect(() => {
-    const savedMenu = localStorage.getItem('pos_menu');
-    if (savedMenu) {
-      setMenuItems(JSON.parse(savedMenu));
-    } else {
-      setMenuItems(MENU_DATA);
-    }
+    const loadData = async () => {
+      if (supabase) {
+        try {
+          const [
+            { data: menuData },
+            { data: txData },
+            { data: expData },
+            { data: incData },
+            { data: settingsData }
+          ] = await Promise.all([
+            supabase.from('menu_items').select('*'),
+            supabase.from('transactions').select('*'),
+            supabase.from('expenses').select('*'),
+            supabase.from('daily_incomes').select('*'),
+            supabase.from('store_settings').select('*')
+          ]);
 
-    const savedCounter = localStorage.getItem('pos_order_counter');
-    const savedCounterDate = localStorage.getItem('pos_order_counter_date');
-    const today = new Date().toDateString();
+          if (menuData && menuData.length > 0) setMenuItems(menuData);
+          else setMenuItems(MENU_DATA);
 
-    if (savedCounterDate === today) {
-      if (savedCounter) setOrderCounter(Number(savedCounter));
-    } else {
-      setOrderCounter(1);
-      localStorage.setItem('pos_order_counter', '1');
-      localStorage.setItem('pos_order_counter_date', today);
-    }
+          if (txData) setTransactions(txData.map(t => ({ 
+            id: t.id, items: t.items, total: t.total, paymentMethod: t.payment_method, timestamp: new Date(t.timestamp), orderNumber: t.order_number 
+          })));
 
-    const savedTransactions = localStorage.getItem('pos_transactions');
-    if (savedTransactions) {
-      setTransactions(JSON.parse(savedTransactions).map((t: any) => ({
-        ...t,
-        timestamp: new Date(t.timestamp)
-      })));
-    }
+          if (expData) setExpenses(expData.map(e => ({ ...e, timestamp: new Date(e.timestamp) })));
+          if (incData) setDailyIncomes(incData.map(i => ({ ...i, timestamp: new Date(i.timestamp) })));
 
-    const savedPettyCash = localStorage.getItem('pos_petty_cash');
-    if (savedPettyCash) {
-      const val = Number(savedPettyCash);
-      setPettyCash(val);
-      setPettyCashDisplay(val === 0 ? '' : val.toLocaleString('id-ID').replace(/,/g, '.'));
-    }
-
-    const savedExpenses = localStorage.getItem('pos_expenses');
-    if (savedExpenses) {
-      setExpenses(JSON.parse(savedExpenses).map((e: any) => ({
-        ...e,
-        timestamp: new Date(e.timestamp)
-      })));
-    }
-
-    const savedDailyIncomes = localStorage.getItem('pos_daily_incomes');
-    if (savedDailyIncomes) {
-      setDailyIncomes(JSON.parse(savedDailyIncomes).map((e: any) => ({
-        ...e,
-        timestamp: new Date(e.timestamp)
-      })));
-    } else {
-      const oldParkingIncome = localStorage.getItem('parkingIncome');
-      if (oldParkingIncome && parseInt(oldParkingIncome) > 0) {
-        setDailyIncomes([{
-          id: Date.now(),
-          description: 'Parkiran Kendaraan',
-          amount: parseInt(oldParkingIncome),
-          timestamp: new Date()
-        }]);
+          const today = new Date().toDateString();
+          if (settingsData) {
+            const pettyCashSetting = settingsData.find(s => s.key === 'petty_cash');
+            if (pettyCashSetting) {
+              const val = Number(pettyCashSetting.value);
+              setPettyCash(val);
+              setPettyCashDisplay(val === 0 ? '' : val.toLocaleString('id-ID').replace(/,/g, '.'));
+            }
+            const orderCounterSetting = settingsData.find(s => s.key === 'order_counter');
+            const orderCounterDateSetting = settingsData.find(s => s.key === 'order_counter_date');
+            
+            if (orderCounterDateSetting && orderCounterDateSetting.value === today) {
+              if (orderCounterSetting) setOrderCounter(Number(orderCounterSetting.value));
+            } else {
+              setOrderCounter(1);
+              supabase.from('store_settings').upsert([
+                { key: 'order_counter', value: '1' },
+                { key: 'order_counter_date', value: today }
+              ]);
+            }
+          }
+          return;
+        } catch (error) {
+          console.error('Supabase load error:', error);
+        }
       }
-    }
+
+      const savedMenu = localStorage.getItem('pos_menu');
+      if (savedMenu) {
+        setMenuItems(JSON.parse(savedMenu));
+      } else {
+        setMenuItems(MENU_DATA);
+      }
+
+      const savedCounter = localStorage.getItem('pos_order_counter');
+      const savedCounterDate = localStorage.getItem('pos_order_counter_date');
+      const today = new Date().toDateString();
+
+      if (savedCounterDate === today) {
+        if (savedCounter) setOrderCounter(Number(savedCounter));
+      } else {
+        setOrderCounter(1);
+        localStorage.setItem('pos_order_counter', '1');
+        localStorage.setItem('pos_order_counter_date', today);
+      }
+
+      const savedTransactions = localStorage.getItem('pos_transactions');
+      if (savedTransactions) {
+        setTransactions(JSON.parse(savedTransactions).map((t: any) => ({
+          ...t,
+          timestamp: new Date(t.timestamp)
+        })));
+      }
+
+      const savedPettyCash = localStorage.getItem('pos_petty_cash');
+      if (savedPettyCash) {
+        const val = Number(savedPettyCash);
+        setPettyCash(val);
+        setPettyCashDisplay(val === 0 ? '' : val.toLocaleString('id-ID').replace(/,/g, '.'));
+      }
+
+      const savedExpenses = localStorage.getItem('pos_expenses');
+      if (savedExpenses) {
+        setExpenses(JSON.parse(savedExpenses).map((e: any) => ({
+          ...e,
+          timestamp: new Date(e.timestamp)
+        })));
+      }
+
+      const savedDailyIncomes = localStorage.getItem('pos_daily_incomes');
+      if (savedDailyIncomes) {
+        setDailyIncomes(JSON.parse(savedDailyIncomes).map((e: any) => ({
+          ...e,
+          timestamp: new Date(e.timestamp)
+        })));
+      } else {
+        const oldParkingIncome = localStorage.getItem('parkingIncome');
+        if (oldParkingIncome && parseInt(oldParkingIncome) > 0) {
+          setDailyIncomes([{
+            id: Date.now(),
+            description: 'Parkiran Kendaraan',
+            amount: parseInt(oldParkingIncome),
+            timestamp: new Date()
+          }]);
+        }
+      }
+    };
+    loadData();
   }, []);
 
   // Save Data
@@ -180,6 +240,12 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem('pos_petty_cash', pettyCash.toString());
+    if (supabase) {
+      const timeoutId = setTimeout(() => {
+        supabase.from('store_settings').upsert({ key: 'petty_cash', value: pettyCash.toString() });
+      }, 1000);
+      return () => clearTimeout(timeoutId);
+    }
   }, [pettyCash]);
 
   useEffect(() => {
@@ -193,6 +259,12 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('pos_order_counter', orderCounter.toString());
     localStorage.setItem('pos_order_counter_date', new Date().toDateString());
+    if (supabase) {
+      supabase.from('store_settings').upsert([
+        { key: 'order_counter', value: orderCounter.toString() },
+        { key: 'order_counter_date', value: new Date().toDateString() }
+      ]);
+    }
   }, [orderCounter]);
 
   // Perhitungan
@@ -228,6 +300,45 @@ export default function App() {
 
   const totalPorsi = itemsSold.reduce((sum, [_, qty]) => sum + qty, 0);
 
+  // --- FILTER BULAN UNTUK LAPORAN ---
+  const isSameMonth = (date: Date, filter: string) => {
+    if (!filter) return true;
+    const d = new Date(date);
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${year}-${month}` === filter;
+  };
+
+  const filteredTransactions = transactions.filter(t => isSameMonth(t.timestamp, filterMonth));
+  const filteredExpenses = expenses.filter(e => isSameMonth(e.timestamp, filterMonth));
+  const filteredDailyIncomes = dailyIncomes.filter(i => isSameMonth(i.timestamp, filterMonth));
+
+  const filteredTotalIncome = filteredTransactions.reduce((sum, t) => sum + t.total, 0);
+  const filteredTotalExpense = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
+  const filteredTotalParkingIncome = filteredDailyIncomes.reduce((sum, i) => sum + i.amount, 0);
+
+  const filteredItemsSold = useMemo(() => {
+    const map: Record<string, number> = {};
+    filteredTransactions.forEach(t => {
+      t.items.forEach((item: any) => {
+        map[item.name] = (map[item.name] || 0) + item.quantity;
+      });
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [filteredTransactions]);
+
+  const filteredIncomeByMethod = useMemo(() => {
+    const methods = { QRIS: 0, Debet: 0, Tunai: 0 };
+    filteredTransactions.forEach(t => {
+      if (t.paymentMethod === 'QRIS') methods.QRIS += t.total;
+      else if (t.paymentMethod === 'Debet') methods.Debet += t.total;
+      else if (t.paymentMethod === 'Tunai') methods.Tunai += t.total;
+    });
+    return methods;
+  }, [filteredTransactions]);
+
+  const filteredTotalPorsi = filteredItemsSold.reduce((sum, [_, qty]) => sum + qty, 0);
+
   // --- UTILS UNTUK INPUT FORMATTING ---
   const formatInputNumber = (val: string) => {
     const clean = val.replace(/\D/g, '');
@@ -240,7 +351,7 @@ export default function App() {
   };
 
   // Logika Menu
-  const handleAddMenu = (e: React.FormEvent) => {
+  const handleAddMenu = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newItem.name || !newItem.price) return;
     
@@ -253,14 +364,21 @@ export default function App() {
     
     setMenuItems([...menuItems, item]);
     setNewItem({ name: '', price: '', category: 'Makanan' });
+    
+    if (supabase) {
+      await supabase.from('menu_items').insert([item]);
+    }
   };
 
-  const handleDeleteMenu = (id: number) => {
+  const handleDeleteMenu = async (id: number) => {
     setMenuItems(menuItems.filter(item => item.id !== id));
+    if (supabase) {
+      await supabase.from('menu_items').delete().eq('id', id);
+    }
   };
 
   // Logika Pengeluaran
-  const handleAddExpense = (e: React.FormEvent) => {
+  const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newExpense.description || !newExpense.amount) return;
 
@@ -273,13 +391,25 @@ export default function App() {
 
     setExpenses([expense, ...expenses]);
     setNewExpense({ description: '', amount: '' });
+    
+    if (supabase) {
+      await supabase.from('expenses').insert([{
+        id: expense.id,
+        description: expense.description,
+        amount: expense.amount,
+        timestamp: expense.timestamp.toISOString()
+      }]);
+    }
   };
 
-  const handleDeleteExpense = (id: number) => {
+  const handleDeleteExpense = async (id: number) => {
     setExpenses(expenses.filter(e => e.id !== id));
+    if (supabase) {
+      await supabase.from('expenses').delete().eq('id', id);
+    }
   };
 
-  const handleAddDailyIncome = (e: React.FormEvent) => {
+  const handleAddDailyIncome = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newDailyIncome.description || !newDailyIncome.amount) return;
     
@@ -292,10 +422,22 @@ export default function App() {
     
     setDailyIncomes([income, ...dailyIncomes]);
     setNewDailyIncome({ description: '', amount: '' });
+    
+    if (supabase) {
+      await supabase.from('daily_incomes').insert([{
+        id: income.id,
+        description: income.description,
+        amount: income.amount,
+        timestamp: income.timestamp.toISOString()
+      }]);
+    }
   };
 
-  const handleDeleteDailyIncome = (id: number) => {
+  const handleDeleteDailyIncome = async (id: number) => {
     setDailyIncomes(dailyIncomes.filter(i => i.id !== id));
+    if (supabase) {
+      await supabase.from('daily_incomes').delete().eq('id', id);
+    }
   };
 
   // Logika Penjumlahan
@@ -516,7 +658,7 @@ export default function App() {
       });
 
       const imgData = canvas.toDataURL('image/png');
-      const pdfWidth = 57; // Strict 57mm
+      const pdfWidth = 58; // Strict 58mm
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
 
       const pdf = new jsPDF({
@@ -554,7 +696,7 @@ export default function App() {
   const handleExportClosing = () => executeExportPDF('report-closing', 'Laporan_Closing');
   const handleExportCustomerPDF = () => executeExportPDF('receipt-thermal', 'Struk_Customer');
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (totalAmount === 0) return;
     const orderNum = orderCounter;
     const newTransaction = {
@@ -571,6 +713,17 @@ export default function App() {
     setCurrentOrderNumber(orderNum);
     setOrderCounter(prev => prev + 1);
     setShowReceipt(true);
+
+    if (supabase) {
+      await supabase.from('transactions').insert([{
+        id: newTransaction.id,
+        items: newTransaction.items,
+        total: newTransaction.total,
+        payment_method: newTransaction.paymentMethod,
+        timestamp: newTransaction.timestamp.toISOString(),
+        order_number: newTransaction.orderNumber
+      }]);
+    }
   };
 
   const resetOrder = () => {
@@ -771,6 +924,23 @@ export default function App() {
 
         {activeTab === 'laporan' && (
           <div className="space-y-6">
+            {/* FILTER BULAN */}
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3 text-blue-600">
+                <History size={24} />
+                <h2 className="font-bold text-lg">Laporan Rekapitulasi</h2>
+              </div>
+              <div className="flex items-center gap-3 w-full sm:w-auto">
+                <label className="text-sm font-bold text-slate-500">Pilih Bulan:</label>
+                <input 
+                  type="month" 
+                  value={filterMonth}
+                  onChange={(e) => setFilterMonth(e.target.value)}
+                  className="p-2 border border-slate-300 rounded-lg text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none flex-1 sm:flex-none"
+                />
+              </div>
+            </div>
+
             {/* SUMMARY CARDS */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
@@ -778,14 +948,14 @@ export default function App() {
                   <ArrowUpCircle size={20} />
                   <span className="text-xs font-bold uppercase">Omset Kotor Bulanan</span>
                 </div>
-                <p className="text-2xl font-black text-emerald-600">{formatIDR(totalIncome)}</p>
+                <p className="text-2xl font-black text-emerald-600">{formatIDR(filteredTotalIncome)}</p>
               </div>
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                 <div className="flex items-center gap-3 text-emerald-600 mb-2">
                   <TrendingUp size={20} />
                   <span className="text-xs font-bold uppercase">Omset Bersih (50%) Bulanan</span>
                 </div>
-                <p className="text-2xl font-black text-emerald-600">{formatIDR(totalProfit)}</p>
+                <p className="text-2xl font-black text-emerald-600">{formatIDR(filteredTotalIncome * 0.5)}</p>
               </div>
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                 <div className="flex items-center gap-3 text-emerald-600 mb-2">
@@ -799,14 +969,14 @@ export default function App() {
                   <ArrowUpCircle size={20} />
                   <span className="text-xs font-bold uppercase">Pemasukan Parkiran Kendaraan Bulanan</span>
                 </div>
-                <p className="text-2xl font-black text-emerald-600">{formatIDR(totalParkingIncome)}</p>
+                <p className="text-2xl font-black text-emerald-600">{formatIDR(filteredTotalParkingIncome)}</p>
               </div>
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                 <div className="flex items-center gap-3 text-rose-600 mb-2">
                   <ArrowDownCircle size={20} />
                   <span className="text-xs font-bold uppercase">Pengeluaran Petty Cash Bulanan</span>
                 </div>
-                <p className="text-2xl font-black text-rose-600">{formatIDR(totalExpense)}</p>
+                <p className="text-2xl font-black text-rose-600">{formatIDR(filteredTotalExpense)}</p>
               </div>
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                 <div className="flex items-center gap-3 text-rose-600 mb-2">
@@ -857,7 +1027,7 @@ export default function App() {
                 </button>
               </div>
               <div className="divide-y divide-slate-100">
-                {transactions.map(t => (
+                {filteredTransactions.map(t => (
                   <div key={t.id} className="p-4 hover:bg-slate-50 transition-colors">
                     <div className="flex justify-between items-start mb-2">
                       <div>
@@ -875,8 +1045,8 @@ export default function App() {
                     </div>
                   </div>
                 ))}
-                {transactions.length === 0 && (
-                  <div className="p-12 text-center text-slate-400 italic">Belum ada riwayat transaksi.</div>
+                {filteredTransactions.length === 0 && (
+                  <div className="p-12 text-center text-slate-400 italic">Belum ada riwayat transaksi untuk bulan ini.</div>
                 )}
               </div>
             </div>
@@ -1206,13 +1376,13 @@ export default function App() {
           </div>
 
           <div style={{ fontSize: '9px', marginBottom: '10px', lineHeight: '1.4' }}>
-            <div style={{ fontWeight: 'bold', fontSize: '10px', marginBottom: '2px' }}>LAPORAN SHIFT</div>
-            <div>Status Closing</div>
+            <div style={{ fontWeight: 'bold', fontSize: '10px', marginBottom: '2px' }}>LAPORAN REKAPITULASI</div>
+            <div>Bulan: {filterMonth || 'Semua Waktu'}</div>
             <div style={{ marginTop: '4px' }}>Kasir: Admin</div>
-            <div>Mulai: {transactions.length > 0 ? formatDate(transactions[transactions.length - 1].timestamp) : formatDate(new Date())}</div>
-            <div>Selesai: {formatDate(new Date())}</div>
-            <div style={{ marginTop: '4px' }}>Terjual {itemsSold.length} Item</div>
-            <div>Terjual {totalPorsi} Porsi</div>
+            <div>Mulai: {filteredTransactions.length > 0 ? formatDate(filteredTransactions[filteredTransactions.length - 1].timestamp) : '-'}</div>
+            <div>Selesai: {filteredTransactions.length > 0 ? formatDate(filteredTransactions[0].timestamp) : '-'}</div>
+            <div style={{ marginTop: '4px' }}>Terjual {filteredItemsSold.length} Item</div>
+            <div>Terjual {filteredTotalPorsi} Porsi</div>
           </div>
 
           <div style={{ borderTop: '1px dashed #000', marginTop: '15px' }}></div>
@@ -1220,7 +1390,7 @@ export default function App() {
           <div style={{ borderTop: '1px dashed #000' }}></div>
 
           <div style={{ fontSize: '9px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            {itemsSold.map(([name, qty]) => (
+            {filteredItemsSold.map(([name, qty]) => (
               <div key={name} style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ flex: 1, paddingRight: '4px' }}>{name}</span>
                 <span>x {qty}</span>
@@ -1235,19 +1405,19 @@ export default function App() {
           <div style={{ fontSize: '9px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span>QRIS</span>
-              <span>Rp {incomeByMethod.QRIS.toLocaleString('id-ID')}</span>
+              <span>Rp {filteredIncomeByMethod.QRIS.toLocaleString('id-ID')}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span>DEBIT CARD</span>
-              <span>Rp {incomeByMethod.Debet.toLocaleString('id-ID')}</span>
+              <span>Rp {filteredIncomeByMethod.Debet.toLocaleString('id-ID')}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span>TUNAI</span>
-              <span>Rp {incomeByMethod.Tunai.toLocaleString('id-ID')}</span>
+              <span>Rp {filteredIncomeByMethod.Tunai.toLocaleString('id-ID')}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', marginTop: '2px' }}>
               <span>TOTAL PEMASUKAN</span>
-              <span>Rp {totalIncome.toLocaleString('id-ID')}</span>
+              <span>Rp {filteredTotalIncome.toLocaleString('id-ID')}</span>
             </div>
           </div>
 
@@ -1260,7 +1430,7 @@ export default function App() {
               <span>KAS AWAL</span>
               <span>Rp {pettyCash.toLocaleString('id-ID')}</span>
             </div>
-            {expenses.map(e => (
+            {filteredExpenses.map(e => (
               <div key={e.id} style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>{e.description}</span>
                 <span>(Rp {e.amount.toLocaleString('id-ID')})</span>
@@ -1268,11 +1438,11 @@ export default function App() {
             ))}
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
               <span>SALDO</span>
-              <span>Rp {(totalIncome + pettyCash - totalExpense).toLocaleString('id-ID')}</span>
+              <span>Rp {(filteredTotalIncome + pettyCash - filteredTotalExpense).toLocaleString('id-ID')}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
               <span>TOTAL KAS</span>
-              <span>Rp {(totalIncome + pettyCash - totalExpense).toLocaleString('id-ID')}</span>
+              <span>Rp {(filteredTotalIncome + pettyCash - filteredTotalExpense).toLocaleString('id-ID')}</span>
             </div>
           </div>
 
