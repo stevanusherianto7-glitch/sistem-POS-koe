@@ -744,9 +744,9 @@ export default function App() {
 
       <div className="max-w-6xl mx-auto p-4">
         {activeTab === 'kasir' && (
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+          <div className="flex flex-col md:grid md:grid-cols-12 gap-4">
             {/* LEFT: MENU SELECTION */}
-            <div className="col-span-1 md:col-span-8 space-y-4">
+            <div className="col-span-1 md:col-span-8 space-y-4 order-1">
               <MenuSelection 
                 menuItems={menuItems}
                 cart={cart}
@@ -756,8 +756,8 @@ export default function App() {
               />
             </div>
 
-            {/* RIGHT: BILLING (DESKTOP ONLY) */}
-            <div className="hidden md:block md:col-span-4">
+            {/* RIGHT: BILLING (ALWAYS VISIBLE, BELOW MENU ON MOBILE) */}
+            <div className="col-span-1 md:col-span-4 order-2">
               <BillingSection 
                 cart={cart}
                 totalAmount={totalAmount}
