@@ -1054,20 +1054,6 @@ export default function App() {
         )}
       </div>
 
-      {/* MOBILE STICKY BOTTOM BAR */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 p-4 flex items-center justify-between shadow-[0_-4px_10px_rgba(0,0,0,0.05)] z-40">
-        <div className="flex flex-col">
-          <span className="text-[10px] text-slate-500 font-bold uppercase">Total Bayar</span>
-          <span className="text-xl font-black text-blue-700">{formatIDR(totalAmount)}</span>
-        </div>
-        <button 
-          onClick={() => setIsBillingOpen(true)}
-          className="bg-blue-600 active:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 active:scale-95"
-        >
-          <ShoppingCart size={20} /> BAYAR
-        </button>
-      </div>
-
       {/* MOBILE BILLING MODAL (BOTTOM SHEET) */}
       {isBillingOpen && (
         <div className="md:hidden fixed inset-0 bg-black/50 z-50 flex items-end">

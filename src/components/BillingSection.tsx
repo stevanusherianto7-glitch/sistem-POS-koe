@@ -24,12 +24,13 @@ interface BillingSectionProps {
   parseInputNumber: (val: string) => number;
 }
 
-export const BillingSection: React.FC<BillingSectionProps> = ({
-  cart, totalAmount, paymentMethod, setPaymentMethod, cashReceivedDisplay, change,
-  customerName, customerWA, setCart, setIsBillingOpen, setCashReceivedDisplay,
-  setCashReceived, setCustomerName, setCustomerWA, handleCheckout, removeFromCart,
-  formatInputNumber, parseInputNumber
-}) => {
+export const BillingSection: React.FC<BillingSectionProps> = (props) => {
+  const {
+    cart, totalAmount, paymentMethod, setPaymentMethod, cashReceivedDisplay, change,
+    customerName, customerWA, setCart, setIsBillingOpen, setCashReceivedDisplay,
+    setCashReceived, setCustomerName, setCustomerWA, handleCheckout, removeFromCart,
+    formatInputNumber, parseInputNumber
+  } = props;
   return (
     <div className="bg-white rounded-t-3xl md:rounded-xl shadow-2xl md:shadow-lg border border-slate-200 p-4 md:p-6 md:sticky md:top-4 h-full md:h-auto overflow-y-auto touch-none md:touch-auto max-w-sm mx-auto w-full">
       <div className="flex justify-between items-center mb-4 md:mb-6">
